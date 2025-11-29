@@ -1,15 +1,5 @@
 /**
  * INSTITUTIONAL-GRADE BINANCE BOT (V6 IRON DEFENSE - 铁壁保本版)
- * 
- * [V6 核心升级]:
- * 1. [状态锁死]: 保本防御一旦触发，永久锁死直到平仓，防止网络波动/重启导致重置。
- * 2. [交易所止损]: 直接向交易所发送 STOP_MARKET 触发单，不依赖内存状态。
- * 3. [四级移动止损]: 0.6%->+0.3%, 1.5%->+1%, 3%->+2%, 5%->追踪止盈(当前-2%)
- * 4. [半仓后强制保本]: 半仓止盈后，剩余仓位自动挂保本止损单。
- * 5. [BTC同向过滤]: 开单前检查BTC趋势，只允许与BTC方向一致的交易。
- * 6. [止损单防重复]: 缓存当前止损档位，避免频繁撤单挂单。
- * 7. [断线恢复]: 重启后自动检查并恢复交易所止损单。
- * 8. [BTC缓存]: BTC方向结果缓存60秒，减少API请求。
  */
 
 const axios = require("axios");
@@ -110,7 +100,6 @@ const config = {
   chandelierExitMultiplier: 1.8
 };
 
-// 全局变量
 let userWs = null;
 let userListenKey = null;
 let userWsStarting = false;
@@ -124,11 +113,7 @@ let lastUserWsHeartbeat = 0;
 let exchangeInfoCache = null;
 let marketWs = null;
 let marketSubscribedSymbols = new Set();
-
-// BTC方向缓存
 let btcDirectionCache = { direction: null, timestamp: 0, details: {} };
-
-// 止损单缓存
 const stopOrderCache = {};
 
 const MAX_SIGNAL_AGE_MS = config.maxSignalAgeMinutes * 60 * 1000;
@@ -150,4 +135,131 @@ function log(...args) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function nowMs() { return Date.now(); }
 
-// 请将此文件继续补全...（由于内容过长，这里只展示核心配置部分）
+function parseSignalTimeToMs(t) {
+  if (t === undefined || t === null || t === "") return NaN;
+  if (typeof t === "number") {
+    if (t > 1e12) return t;
+    if (t > 1e9) return t * 1000;
+    return NaN;
+  }
+  const s = String(t).trim();
+  if (/^\d+$/.test(s)) {
+    if (s.length >= 13) return Number(s);
+    if (s.length === 10) return Number(s) * 1000;
+  }
+  let ms = Date.parse(s);
+  if (!isNaN(ms)) return ms;
+  ms = Date.parse(s.replace(/-/g, "/"));
+  if (!isNaN(ms)) return ms;
+  return NaN;
+}
+
+function loadPositions() {
+  try {
+    if (!fs.existsSync(POS_DB)) return {};
+    return JSON.parse(fs.readFileSync(POS_DB, "utf8") || "{}");
+  } catch (e) {
+    log("loadPositions error:", e.message || e);
+    return {};
+  }
+}
+
+function savePositions(obj) {
+  try {
+    const data = JSON.stringify(obj, null, 2);
+    const dir = path.dirname(POS_DB);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(POS_DB, data, { encoding: "utf8", flag: "w" });
+  } catch (e) {
+    log("savePositions error:", e.message || e);
+  }
+}
+
+function appendToHistory(positionData) {
+  try {
+    if (!positionData.qty && !positionData.amount) return;
+    let history = [];
+    if (fs.existsSync(HISTORY_DB)) {
+      try {
+        history = JSON.parse(fs.readFileSync(HISTORY_DB, "utf8")) || [];
+        if (!Array.isArray(history)) history = [];
+      } catch (e) { history = []; }
+    }
+    const uniqueId = positionData.id || `${positionData.symbol}_${positionData.openedAt}_${positionData.closedAt || Date.now()}`;
+    const existingIndex = history.findIndex(h => (h.id || `${h.symbol}_${h.openedAt}_${h.closedAt}`) === uniqueId);
+    const recordToSave = { ...positionData, id: uniqueId };
+    if (existingIndex >= 0) history[existingIndex] = recordToSave;
+    else {
+      history.push(recordToSave);
+      log(`[HISTORY] Archived record for ${positionData.symbol} PnL: ${positionData.realizedProfit}`);
+    }
+    if (history.length > 2000) history = history.slice(-2000);
+    fs.writeFileSync(HISTORY_DB, JSON.stringify(history, null, 2));
+  } catch (e) {
+    log("[HISTORY] Failed to save:", e.message);
+  }
+}
+
+function sanitizeSymbol(raw) {
+  if (!raw) return "";
+  return String(raw).toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function signQuery(paramsStr) {
+  return crypto.createHmac("sha256", config.apiSecret).update(paramsStr).digest("hex");
+}
+
+const SIGNAL_BLACKLIST_SET = new Set((config.signalBlacklist || []).map(s => sanitizeSymbol(s)).filter(Boolean));
+function isBlacklisted(symbol) {
+  return symbol ? SIGNAL_BLACKLIST_SET.has(sanitizeSymbol(symbol)) : false;
+}
+
+const axiosInstance = axios.create({
+  timeout: 10000,
+  httpAgent: new http.Agent({ keepAlive: true }),
+  httpsAgent: new https.Agent({ keepAlive: true })
+});
+
+const requestQueue = []; 
+let processingQueue = false;
+const recentSignedRequests = [];
+
+async function enqueueSignedRequest(fn) {
+  return new Promise((resolve, reject) => {
+    requestQueue.push({ fn, resolve, reject });
+    if (!processingQueue) processQueue();
+  });
+}
+
+async function processQueue() {
+  processingQueue = true;
+  while (requestQueue.length) {
+    const now = Date.now();
+    while (recentSignedRequests.length && (now - recentSignedRequests[0]) > 60000) recentSignedRequests.shift();
+    if (recentSignedRequests.length >= config.reqPerMinuteLimit) {
+      const waitMs = 60000 - (now - recentSignedRequests[0]) + 20;
+      await sleep(waitMs);
+      continue;
+    }
+    const job = requestQueue.shift();
+    try {
+      const start = Date.now();
+      const res = await job.fn();
+      recentSignedRequests.push(Date.now());
+      const took = Date.now() - start;
+      const waitAfter = Math.max(0, config.reqMinIntervalMs - took);
+      if (waitAfter > 0) await sleep(waitAfter);
+      job.resolve(res);
+    } catch (e) {
+      const status = e?.response?.status;
+      if (status === 429 || status === 418) {
+        const backoffMs = 1000 + Math.floor(Math.random() * 500);
+        await sleep(backoffMs);
+        requestQueue.push(job);
+      } else {
+        job.reject(e);
+      }
+    }
+  }
+  processingQueue = false;
+}
