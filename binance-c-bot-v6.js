@@ -569,7 +569,7 @@ async function sendSignedRequest(method, pathUrl, params = {}) {
         const qs = new URLSearchParams(qsObj).toString();
         const signature = signQuery(qs);
         const fullQs = qs + `&signature=${signature}`;
-        const url = `${API_BASE}${pathUrl}? ${fullQs}`;
+        const url = `${API_BASE}${pathUrl}?${fullQs}`;
         const headers = { "X-MBX-APIKEY": config.apiKey };
 
         const res = await axiosInstance({ method, url, headers, timeout: 10000 });
@@ -1210,7 +1210,7 @@ function parseSignalItem(raw) {
 
 async function fetchFromUrl(url, sinceISO) {
   try {
-    const full = url + (sinceISO ? ("? since=" + encodeURIComponent(sinceISO)) : "");
+    const full = url + (sinceISO ? ("?since=" + encodeURIComponent(sinceISO)) : "");
     if (config.verbose) log("fetchFromUrl:", full);
     const res = await axiosInstance.get(full, { timeout: 10000 });
     return Array.isArray(res.data) ? res.data : (res.data && Array.isArray(res.data.data) ? res.data.data : []);
