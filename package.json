@@ -1,0 +1,15 @@
+{
+  "name": "kaidan",
+  "version": "1.0.0",
+  "description": "1111111111111111",
+  "main": "binance-c-bot - V5智能量化.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "technicalindicators": "^3.1.0"
+  }
+}
