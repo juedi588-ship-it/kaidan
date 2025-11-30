@@ -1,10 +1,10 @@
 {
   "name": "kaidan",
   "version": "1.0.0",
-  "description": "1111111111111111",
+  "description": "Optimized trading signal generation system with multi-indicator confirmation for Binance futures trading",
   "main": "binance-c-bot - V5智能量化.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node test-signal-strategy.js"
   },
   "keywords": [],
   "author": "",

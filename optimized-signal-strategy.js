@@ -465,6 +465,16 @@ function checkEMATrend(closes, side) {
 }
 
 /**
+ * 生成冷却缓存的键
+ * @param {string} symbol - 交易对
+ * @param {string} side - "LONG" 或 "SHORT"
+ * @returns {string} - 缓存键
+ */
+function getCooldownKey(symbol, side) {
+  return `${symbol}_${side}`;
+}
+
+/**
  * 检查冷却时间
  * @param {string} symbol - 交易对
  * @param {string} side - "LONG" 或 "SHORT"
@@ -474,7 +484,7 @@ function checkCooldown(symbol, side) {
   const { normalMinutes, afterLossMinutes } = SIGNAL_CONFIG.cooldown;
   const now = Date.now();
   
-  const key = `${symbol}_${side}`;
+  const key = getCooldownKey(symbol, side);
   const lastSignal = signalCooldownCache[key];
   
   if (!lastSignal) {
@@ -505,7 +515,7 @@ function checkCooldown(symbol, side) {
  * @param {boolean} wasLoss - 是否亏损
  */
 function updateCooldown(symbol, side, wasLoss = false) {
-  const key = `${symbol}_${side}`;
+  const key = getCooldownKey(symbol, side);
   signalCooldownCache[key] = {
     timestamp: Date.now(),
     wasLoss
@@ -830,8 +840,8 @@ function markSignalAsLoss(symbol, side) {
  */
 function clearCooldown(symbol = null) {
   if (symbol) {
-    delete signalCooldownCache[`${symbol}_LONG`];
-    delete signalCooldownCache[`${symbol}_SHORT`];
+    delete signalCooldownCache[getCooldownKey(symbol, "LONG")];
+    delete signalCooldownCache[getCooldownKey(symbol, "SHORT")];
   } else {
     Object.keys(signalCooldownCache).forEach(key => delete signalCooldownCache[key]);
   }
